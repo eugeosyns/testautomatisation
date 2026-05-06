@@ -1,22 +1,12 @@
-name: Flutter Build
+name: Flutter Build Android
 
-# ┌─────────────────────────────────────────────┐
-# │  CE WORKFLOW SE DÉCLENCHE :                 │
-# │  - Sur chaque push sur main                 │
-# │  - Sur chaque tag v* (ex: v1.0.0)           │
-# └─────────────────────────────────────────────┘
 on:
   push:
     branches: [main]
-    tags:
-      - 'v*'
 
 env:
   FLUTTER_VERSION: '3.38.1'
 
-# ─────────────────────────────────────────────
-# JOB 1 — Build Android (.aab)
-# ─────────────────────────────────────────────
 jobs:
   build-android:
     name: Build Android
@@ -25,6 +15,10 @@ jobs:
     steps:
       - name: 📥 Récupérer le code
         uses: actions/checkout@v4
+        with:
+          # Nécessaire pour pouvoir faire un git push depuis le workflow
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
 
       - name: ☕ Installer Java
         uses: actions/setup-java@v4
@@ -42,53 +36,49 @@ jobs:
       - name: 📦 Installer les dépendances
         run: flutter pub get
 
+      # ─────────────────────────────────────────
+      # AUTO VERSION — lit le pubspec.yaml,
+      # incrémente le build number (+1)
+      # et met à jour le fichier
+      # ─────────────────────────────────────────
+      - name: 🔢 Incrémenter la version
+        id: version
+        run: |
+          # Lire la version actuelle ex: "1.0.0+5"
+          CURRENT=$(grep '^version:' pubspec.yaml | sed 's/version: //')
+          
+          # Séparer "1.0.0" et "5"
+          VERSION_NAME=$(echo $CURRENT | cut -d'+' -f1)
+          BUILD_NUMBER=$(echo $CURRENT | cut -d'+' -f2)
+          
+          # Incrémenter le build number
+          NEW_BUILD=$((BUILD_NUMBER + 1))
+          NEW_VERSION="${VERSION_NAME}+${NEW_BUILD}"
+          
+          # Mettre à jour pubspec.yaml
+          sed -i "s/^version: .*/version: $NEW_VERSION/" pubspec.yaml
+          
+          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "✅ Version : $CURRENT → $NEW_VERSION"
+
       - name: 🔨 Build Android App Bundle
         run: flutter build appbundle --release
 
-      # Le fichier .aab est disponible en téléchargement
-      # dans l'onglet "Actions" de votre repo GitHub
       - name: 📤 Sauvegarder le .aab
         uses: actions/upload-artifact@v4
         with:
-          name: android-release-${{ github.ref_name }}
+          name: android-${{ steps.version.outputs.version }}
           path: build/app/outputs/bundle/release/app-release.aab
           retention-days: 30
 
-# ─────────────────────────────────────────────
-# JOB 2 — Build iOS (.ipa non signé)
-# ─────────────────────────────────────────────
-  build-ios:
-    name: Build iOS
-    runs-on: macos-latest
-
-    steps:
-      - name: 📥 Récupérer le code
-        uses: actions/checkout@v4
-
-      - name: 🐦 Installer Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: ${{ env.FLUTTER_VERSION }}
-          channel: stable
-          cache: true
-
-      - name: 📦 Installer les dépendances
-        run: flutter pub get
-
-      - name: 🔨 Build iOS (sans signature)
-        run: flutter build ios --release --no-codesign
-
-      # On crée un .ipa "brut" sans signature
-      # (juste pour vérifier que le build fonctionne)
-      - name: 📦 Créer le .ipa non signé
+      # ─────────────────────────────────────────
+      # COMMIT la nouvelle version dans le repo
+      # pour que le build number soit sauvegardé
+      # ─────────────────────────────────────────
+      - name: 💾 Sauvegarder la version dans le repo
         run: |
-          mkdir -p Payload
-          cp -r build/ios/iphoneos/Runner.app Payload/
-          zip -r Runner.ipa Payload/
-
-      - name: 📤 Sauvegarder le .ipa
-        uses: actions/upload-artifact@v4
-        with:
-          name: ios-release-${{ github.ref_name }}
-          path: Runner.ipa
-          retention-days: 30
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add pubspec.yaml
+          git commit -m "chore: version bump → ${{ steps.version.outputs.version }} [skip ci]"
+          git push
