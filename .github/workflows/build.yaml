@@ -1,4 +1,4 @@
-name: Flutter Build Android
+name: Flutter Build
 
 on:
   push:
@@ -8,6 +8,9 @@ env:
   FLUTTER_VERSION: '3.38.1'
 
 jobs:
+# ─────────────────────────────────────────────
+# JOB 1 — Auto version + Build Android
+# ─────────────────────────────────────────────
   build-android:
     name: Build Android
     runs-on: ubuntu-latest
@@ -16,7 +19,6 @@ jobs:
       - name: 📥 Récupérer le code
         uses: actions/checkout@v4
         with:
-          # Nécessaire pour pouvoir faire un git push depuis le workflow
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
@@ -37,27 +39,18 @@ jobs:
         run: flutter pub get
 
       # ─────────────────────────────────────────
-      # AUTO VERSION — lit le pubspec.yaml,
-      # incrémente le build number (+1)
-      # et met à jour le fichier
+      # AUTO VERSION — incrémente le build number
+      # ex: 1.0.0+5 → 1.0.0+6
       # ─────────────────────────────────────────
       - name: 🔢 Incrémenter la version
         id: version
         run: |
-          # Lire la version actuelle ex: "1.0.0+5"
           CURRENT=$(grep '^version:' pubspec.yaml | sed 's/version: //')
-          
-          # Séparer "1.0.0" et "5"
           VERSION_NAME=$(echo $CURRENT | cut -d'+' -f1)
           BUILD_NUMBER=$(echo $CURRENT | cut -d'+' -f2)
-          
-          # Incrémenter le build number
           NEW_BUILD=$((BUILD_NUMBER + 1))
           NEW_VERSION="${VERSION_NAME}+${NEW_BUILD}"
-          
-          # Mettre à jour pubspec.yaml
           sed -i "s/^version: .*/version: $NEW_VERSION/" pubspec.yaml
-          
           echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
           echo "✅ Version : $CURRENT → $NEW_VERSION"
 
@@ -72,8 +65,8 @@ jobs:
           retention-days: 30
 
       # ─────────────────────────────────────────
-      # COMMIT la nouvelle version dans le repo
-      # pour que le build number soit sauvegardé
+      # Commit le pubspec.yaml mis à jour
+      # [skip ci] évite une boucle infinie
       # ─────────────────────────────────────────
       - name: 💾 Sauvegarder la version dans le repo
         run: |
@@ -82,3 +75,51 @@ jobs:
           git add pubspec.yaml
           git commit -m "chore: version bump → ${{ steps.version.outputs.version }} [skip ci]"
           git push
+
+# ─────────────────────────────────────────────
+# JOB 2 — Build iOS
+# Vous faites ensuite : git pull → Xcode → Archive
+# ─────────────────────────────────────────────
+  build-ios:
+    name: Build iOS
+    runs-on: macos-latest
+    # Attend que Android soit fini (et que le version bump soit commité)
+    needs: build-android
+
+    steps:
+      - name: 📥 Récupérer le code
+        uses: actions/checkout@v4
+        with:
+          # Récupère le dernier commit (avec le version bump)
+          ref: main
+
+      - name: 🐦 Installer Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: 📦 Installer les dépendances
+        run: flutter pub get
+
+      - name: 🔨 Build iOS (sans signature)
+        run: flutter build ios --release --no-codesign
+
+      # ─────────────────────────────────────────
+      # On sauvegarde le dossier Runner.app compilé
+      # Vous faites git pull → Xcode voit le build
+      # prêt → Archive → App Store Connect
+      # ─────────────────────────────────────────
+      - name: 📦 Créer le .ipa non signé
+        run: |
+          mkdir -p Payload
+          cp -r build/ios/iphoneos/Runner.app Payload/
+          zip -r Runner.ipa Payload/
+
+      - name: 📤 Sauvegarder le .ipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-${{ needs.build-android.outputs.version }}
+          path: Runner.ipa
+          retention-days: 30
