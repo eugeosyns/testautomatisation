@@ -1,0 +1,94 @@
+name: Flutter Build
+
+# ┌─────────────────────────────────────────────┐
+# │  CE WORKFLOW SE DÉCLENCHE :                 │
+# │  - Sur chaque push sur main                 │
+# │  - Sur chaque tag v* (ex: v1.0.0)           │
+# └─────────────────────────────────────────────┘
+on:
+  push:
+    branches: [main]
+    tags:
+      - 'v*'
+
+env:
+  FLUTTER_VERSION: '3.22.0'
+
+# ─────────────────────────────────────────────
+# JOB 1 — Build Android (.aab)
+# ─────────────────────────────────────────────
+jobs:
+  build-android:
+    name: Build Android
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 📥 Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: ☕ Installer Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 🐦 Installer Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: 📦 Installer les dépendances
+        run: flutter pub get
+
+      - name: 🔨 Build Android App Bundle
+        run: flutter build appbundle --release
+
+      # Le fichier .aab est disponible en téléchargement
+      # dans l'onglet "Actions" de votre repo GitHub
+      - name: 📤 Sauvegarder le .aab
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-release-${{ github.ref_name }}
+          path: build/app/outputs/bundle/release/app-release.aab
+          retention-days: 30
+
+# ─────────────────────────────────────────────
+# JOB 2 — Build iOS (.ipa non signé)
+# ─────────────────────────────────────────────
+  build-ios:
+    name: Build iOS
+    runs-on: macos-latest
+
+    steps:
+      - name: 📥 Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: 🐦 Installer Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: 📦 Installer les dépendances
+        run: flutter pub get
+
+      - name: 🔨 Build iOS (sans signature)
+        run: flutter build ios --release --no-codesign
+
+      # On crée un .ipa "brut" sans signature
+      # (juste pour vérifier que le build fonctionne)
+      - name: 📦 Créer le .ipa non signé
+        run: |
+          mkdir -p Payload
+          cp -r build/ios/iphoneos/Runner.app Payload/
+          zip -r Runner.ipa Payload/
+
+      - name: 📤 Sauvegarder le .ipa
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-release-${{ github.ref_name }}
+          path: Runner.ipa
+          retention-days: 30
